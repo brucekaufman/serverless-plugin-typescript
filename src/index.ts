@@ -2,6 +2,7 @@ import * as path from 'path'
 import * as fs from 'fs-extra'
 import * as _ from 'lodash'
 import * as globby from 'globby'
+import rimraf from 'rimraf'
 
 import * as typescript from './typescript'
 import { watchFiles } from './watchFiles'
@@ -21,7 +22,6 @@ export class TypeScriptPlugin {
   constructor(serverless: Serverless.Instance, options: Serverless.Options) {
     this.serverless = serverless
     this.options = options
-
     this.commands = {
       invoke: {
         commands: {
@@ -122,16 +122,22 @@ export class TypeScriptPlugin {
 
   prepare() {
     // exclude serverless-plugin-typescript
-    for (const fnName in this.functions) {
-      const fn = this.functions[fnName]
-      fn.package = fn.package || {
-        exclude: [],
-        include: [],
-        patterns: []
-      }
+    if(this.serverless.service.package.individually) {
+      for (const fnName in this.functions) {
+        const fn = this.functions[fnName]
+        fn.package = fn.package || {
+          exclude: [],
+          include: [],
+          patterns: []
+        }
 
-      // Add plugin to excluded packages or an empty array if exclude is undefined
-      fn.package.exclude = _.uniq([...fn.package.exclude || [], 'node_modules/serverless-plugin-typescript'])
+        // Add plugin to excluded packages or an empty array if exclude is undefined
+        fn.package.exclude = _.uniq([...fn.package.exclude || [], 'node_modules/serverless-plugin-typescript'])
+      }
+    } else {
+      this.serverless.service.package.patterns.push(
+        '!node_modules/serverless-plugin-typescript'
+      )
     }
   }
 
@@ -216,6 +222,23 @@ export class TypeScriptPlugin {
     }
   }
 
+  /** 
+   * the localstack plugin overrides the default behavior
+   * of deployments. This method disables copying the dependencies
+   * when localstack is activated
+  */
+  private localStackCopyOverride() {
+    const {externalPlugins} = this.serverless.pluginManager;
+    let lsPlugin;
+    externalPlugins.forEach(
+      (plugin) => {
+        if (plugin.constructor.name === 'LocalstackPlugin') {
+          lsPlugin = plugin;
+        }
+      }
+    );
+    return lsPlugin && lsPlugin.pluginEnabled;
+  }
   /**
    * Copy the `node_modules` folder and `package.json` files to the output
    * directory.
@@ -224,7 +247,11 @@ export class TypeScriptPlugin {
   async copyDependencies(isPackaging = false) {
     const outPkgPath = path.resolve(path.join(BUILD_FOLDER, 'package.json'))
     const outModulesPath = path.resolve(path.join(BUILD_FOLDER, 'node_modules'))
-
+    const copyFileOverride = this.localStackCopyOverride()
+    if(copyFileOverride) {
+      this.serverless.cli.log('Localstack plugin is active, skipping node_modules copy')
+    }
+    isPackaging = copyFileOverride ? false : isPackaging
     // copy development dependencies during packaging
     if (isPackaging) {
       if (fs.existsSync(outModulesPath)) {
@@ -233,7 +260,24 @@ export class TypeScriptPlugin {
 
       fs.copySync(
         path.resolve('node_modules'),
-        path.resolve(path.join(BUILD_FOLDER, 'node_modules'))
+        path.resolve(path.join(BUILD_FOLDER, 'node_modules')),
+        // {
+        //   filter: (file: string) => {
+        //     if(
+        //       file.includes('/aws-sdk/')
+        //       || file.includes('/@types/')
+        //       || file.includes('/serverless/')
+        //       || file.includes('/serverless-')
+        //       || file.includes('/typescript/')
+        //       || file.includes('/@datadog/')
+        //       || file.includes('/jest/')
+        //     ) {
+        //       this.serverless.cli.log(`skipping ${file}`)
+        //       return false
+        //     }
+        //     return true
+        //   }
+        // }
       )
     } else {
       if (!fs.existsSync(outModulesPath)) {

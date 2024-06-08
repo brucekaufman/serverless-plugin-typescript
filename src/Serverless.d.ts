@@ -71,8 +71,11 @@ declare namespace Serverless {
         }
       }
       >
-
+  class Plugin {
+    pluginEnabled: boolean
+  }
   interface PluginManager {
     spawn(command: string): Promise<void>
+    externalPlugins: Set<Plugin>
   }
 }
